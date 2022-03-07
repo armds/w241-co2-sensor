@@ -44,14 +44,26 @@ float startTempC;
 float startTempF;
 
 // How long to wait for temperature stabilization for correction term, normally 20
-float delayMinutes = 20;
+float delayMinutes = 1;
 
 // Name of calibration timestamp file
 String calibrationTimeStampFile = "calstamp.txt";
 
+// set this to either B or W depending on which sensor is being written to
+char sensorId = "B";
+
+// if we need to set the clock chip
+boolean setClock = true;
+
+// interval between samples in seconds
+int secsBetweenSamples = 5;
+
+// interval between calibration file writes
+int secsBetweenCalibWrites = 10;
+
 void setup()
 {
-  Serial.begin(115200);
+  Serial.begin(9600);
 
   Wire.begin(); //Initialize I2C
   myLog.begin(); //Open connection to OpenLog (no pun intended)
@@ -68,8 +80,15 @@ void setup()
   //Use the time from the Arduino compiler (build time) to set the RTC
   //Keep in mind that Arduino does not get the new compiler time every time it compiles.
   //to ensure the proper time is loaded, open up a fresh version of the IDE and load the sketch.
-  if (rtc.setToCompilerTime() == false) {
-    Serial.println("Something went wrong setting the time");
+  if (setClock) {
+    if (rtc.setToCompilerTime() == false) {
+      Serial.println("Something went wrong setting the time");
+    }
+
+    rtc.updateTime();
+    // correct to put it in EST not PST
+    int hrs = rtc.getHours();
+    rtc.setHours(hrs+3);
   }
   
   // set up environment sensor
@@ -135,15 +154,12 @@ void loop()
 
   // if the current logging csv file does not exist, intitalize it with the header row
   String currentLogFileName = getCurrentLogFileName();
-  //Get size of file
-  long sizeOfFile = myLog.size(currentLogFileName);
-
-  if (sizeOfFile == -1){
+  if (myLog.size(currentLogFileName) == -1){
     Serial.print(currentTime);
     Serial.print("\tInitializing logfile: ");
     Serial.println(currentLogFileName);
     myLog.append(currentLogFileName);
-    myLog.println("TempC,TempF,Humid%,Corr TempC,Corr TempF,CO2 ppm,TVOC ppb,RunTime,Validity");
+    myLog.println("Time,TempC,TempF,Humid%,Corr TempC,Corr TempF,CO2 ppm,TVOC ppb,RunTime,Validity");
   }
   
 
@@ -154,14 +170,11 @@ void loop()
 
     
     
-    String outputString ="Time,";
+    String outputString ="";
     String dataLogString ="";
-    outputString += currentTime;
-    dataLogString += currentTime;
-    dataLogString += ",";
+    
     
     //If so, have the sensor read and calculate the results.
-    //Get them later
     myCCS811.readAlgorithmResults();
 
     float BMEtempC = myBME280.readTempC();
@@ -169,24 +182,89 @@ void loop()
     float BMEhumid = myBME280.readFloatHumidity();
 
     dataLogString += BMEtempC;
-    dataLogString += "\t";
+    dataLogString += ",";
     dataLogString += BMEtempF;
-    dataLogString += "\t";
+    dataLogString += ",";
     dataLogString += BMEhumid;
-    dataLogString += "\t";
+    dataLogString += ",";
 
     
-    if (!correctionSet && millis() > delayMinutes * 60 * 1000 ){
-      tempCorrectionC = BMEtempC-startTempC;
-      tempCorrectionF = BMEtempF-startTempF;
-      outputString += "Found Temperature correction of ";
-      outputString += tempCorrectionC; 
-      outputString += " at time";
-      outputString += currentTime;
-      outputString += "\n";
-      correctionSet = true;
+    if (!correctionSet) {
+      if( millis() > delayMinutes * 60 * 1000 ){
+    
+        tempCorrectionC = BMEtempC-startTempC;
+        tempCorrectionF = BMEtempF-startTempF;
+        outputString += "Found Temperature correction of ";
+        outputString += tempCorrectionC; 
+        outputString += " at time";
+        outputString += currentTime;
+        outputString += "\n";
+        correctionSet = true;
+      } 
+      else if (millis() > 10000  && myLog.size(calibrationTimeStampFile) > -1){
+        // check for logged calibration
+        char calibuf[50];
+        myLog.read(calibuf,50,calibrationTimeStampFile);
+
+        char buff[2];
+        //year
+        buff[0] = calibuf[0];
+        buff[1] = calibuf[1];
+        int caliyear = atoi(buff);
+
+        //month
+        buff[0] = calibuf[3];
+        buff[1] = calibuf[4];
+        int calimonth = atoi(buff);
+        
+        //day
+        buff[0] = calibuf[6];
+        buff[1] = calibuf[7];
+        int caliday = atoi(buff);
+        //hour
+        buff[0] = calibuf[9];
+        buff[1] = calibuf[10];
+        int calihour = atoi(buff);
+        //minute
+        buff[0] = calibuf[12];
+        buff[1] = calibuf[13];
+        int calimin = atoi(buff);  
+
+        char fbuff[6];
+        //cCalibration
+        fbuff[0] = calibuf[15];
+        fbuff[1] = calibuf[16];
+        fbuff[2] = calibuf[17];
+        fbuff[3] = calibuf[18];
+        fbuff[4] = calibuf[19];
+        fbuff[5] = calibuf[20];
+        float caliC = atof(fbuff);
+
+        //cCalibration
+        fbuff[0] = calibuf[22];
+        fbuff[1] = calibuf[23];
+        fbuff[2] = calibuf[24];
+        fbuff[3] = calibuf[25];
+        fbuff[4] = calibuf[26];
+        fbuff[5] = calibuf[27];
+        float caliF = atof(fbuff);
+
+        char cal_output[50];
+        sprintf(cal_output, "%02d %02d %02d %02d %02d %06d %06d", 
+              caliyear,calimonth,
+              caliday,calihour, calimin,
+              caliC, caliF);
+        Serial.print("Read from calibration file: ");
+        Serial.print(cal_output);
+        Serial.print(" from ");
+        Serial.println(calibuf);     
+      }
     } 
 
+    outputString += "Time\t";
+    outputString += currentTime;
+    dataLogString += currentTime;
+    dataLogString += ",";
     dataLogString += BMEtempC-tempCorrectionC;
     dataLogString += ",";
     dataLogString += BMEtempF-tempCorrectionF;
@@ -200,7 +278,7 @@ void loop()
 
     outputString +=("\t");
     outputString +=(BMEtempF);
-    outputString +=("F,");
+    outputString +=("F\t");
 
     outputString +=("corrected temp\t");
     outputString +=(BMEtempC-tempCorrectionC);
@@ -214,14 +292,14 @@ void loop()
     outputString +=(BMEhumid);
     outputString +=("%\t");
 
-    outputString +=("pressure,");
+    outputString +=("pressure\t");
     float BMEmbar = myBME280.readFloatPressure()/100;
     outputString +=(BMEmbar); // convert to mbar
-    outputString +=("mbar,");
+    outputString +=("mbar\t");
     dataLogString += BMEmbar;
     dataLogString += ",";
   
-    outputString +=" CO2,";
+    outputString +=" CO2\t";
     //Returns calculated CO2 reading
     outputString +=myCCS811.getCO2();
     dataLogString += myCCS811.getCO2();
@@ -241,23 +319,31 @@ void loop()
     myLog.syncFile();
 
     // write out the latest calibration time and value, so we can reuse at restart
-    if (calibrationSet) {
+    // only do this once a minute
+    if (correctionSet ) {
       if (myLog.size(calibrationTimeStampFile) > -1) {
         myLog.removeFile(calibrationTimeStampFile);
       }
-      myLog.append(calibrationTimeStampFile)
-      String cal_output;
-      sprintf(cal_output, "%02d %02d %02d %02d %02d %06f %06f", 
+      myLog.append(calibrationTimeStampFile);
+
+    // arudino sprintf can't do floats because ¯\_(ツ)_/¯
+      char cCorr[8];
+      char fCorr[8];
+      dtostrf(tempCorrectionC,6,1,cCorr[6]);
+      dtostrf(tempCorrectionF,6,1,fCorr[6]);
+      
+      char cal_output[50];
+      sprintf(cal_output, "%02d %02d %02d %02d %02d %s %s", 
               rtc.getYear(),rtc.getMonth(),
-              rtc.getDate(),rtc.getHours(),
-              tempCorrectionC,tempCorrectionF);
+              rtc.getDate(),rtc.getHours(),rtc.getMinutes(),
+              cCorr,fCorr);
       myLog.println(cal_output);
-      Serial.print("Wrote calibration file: ")
+      Serial.print("Wrote calibration file: ");
       Serial.println(cal_output);
     }      
   }
 
-  delay(5000); //Don't spam the I2C bus
+  delay(secsBetweenSamples *1000); //Don't spam the I2C bus
 }
 
 //Prints the amount of time the board has been running
@@ -271,7 +357,7 @@ String getCurrentLogFileName()
   int month = rtc.getMonth();
   int year = rtc.getYear();
 
-  sprintf(buffer, "B%02d%02d%02d_%02d.csv", year, month,day,hours);
+  sprintf(buffer, "%c%02d%02d%02d_%02d.csv", sensorId, year, month,day,hours);
   
   String output = buffer;
  
