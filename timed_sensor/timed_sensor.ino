@@ -46,14 +46,17 @@ float startTempF;
 // How long to wait for temperature stabilization for correction term, normally 20
 float delayMinutes = 1;
 
+// sleep tolerance, how old a calibration use stamp can be for us to still use it.
+float tolMinutes = 10;
+
 // Name of calibration timestamp file
 String calibrationTimeStampFile = "calstamp.txt";
 
 // set this to either B or W depending on which sensor is being written to
-char sensorId = "B";
+char sensorId = 'B';
 
 // if we need to set the clock chip
-boolean setClock = true;
+boolean setClock = false;
 
 // interval between samples in seconds
 int secsBetweenSamples = 5;
@@ -61,16 +64,18 @@ int secsBetweenSamples = 5;
 // interval between calibration file writes
 int secsBetweenCalibWrites = 10;
 
+
+// string buffers like to be global, because memory is a thing
+char fCorr[10];
+char cCorr[10];
+char calibuf[30];
+char calibuf2[30];         
 void setup()
 {
   Serial.begin(9600);
 
   Wire.begin(); //Initialize I2C
   myLog.begin(); //Open connection to OpenLog (no pun intended)
-
-  Serial.println("OpenLog Write File Test");
-  
- 
 
   // initialize clock
    if (rtc.begin() == false) {
@@ -80,6 +85,7 @@ void setup()
   //Use the time from the Arduino compiler (build time) to set the RTC
   //Keep in mind that Arduino does not get the new compiler time every time it compiles.
   //to ensure the proper time is loaded, open up a fresh version of the IDE and load the sketch.
+  rtc.set24Hour();
   if (setClock) {
     if (rtc.setToCompilerTime() == false) {
       Serial.println("Something went wrong setting the time");
@@ -88,7 +94,14 @@ void setup()
     rtc.updateTime();
     // correct to put it in EST not PST
     int hrs = rtc.getHours();
-    rtc.setHours(hrs+3);
+    int day = rtc.getDate();
+    int EST = hrs+3;
+    if (EST > 23) {
+      EST = EST - 24;
+      day = day +1;
+    }
+    rtc.setHours(EST);
+    rtc.setDate(day);
   }
   
   // set up environment sensor
@@ -131,10 +144,7 @@ void setup()
   }
   else
   {
-
-    // read calibration start, timestamp, and last run time from disc
-
-    // if last run time > 
+   // if last run time > 
     startTempC = myBME280.readTempC();
     startTempF = myBME280.readTempF();
     Serial.print("BME280 online Initial temperature(C):" );
@@ -154,12 +164,13 @@ void loop()
 
   // if the current logging csv file does not exist, intitalize it with the header row
   String currentLogFileName = getCurrentLogFileName();
-  if (myLog.size(currentLogFileName) == -1){
+  if (myLog.size(currentLogFileName) <1){
     Serial.print(currentTime);
     Serial.print("\tInitializing logfile: ");
     Serial.println(currentLogFileName);
     myLog.append(currentLogFileName);
-    myLog.println("Time,TempC,TempF,Humid%,Corr TempC,Corr TempF,CO2 ppm,TVOC ppb,RunTime,Validity");
+    myLog.println("Time,TempC,TempF,Humid%,Corr TempC,Corr TempF,Press mbar,CO2 ppm,TVOC ppb,RunTime,Validity");
+    myLog.syncFile();
   }
   
 
@@ -167,9 +178,6 @@ void loop()
   //Check to see if data is ready with .dataAvailable()
   if (myCCS811.dataAvailable())
   {
-
-    
-    
     String outputString ="";
     String dataLogString ="";
     
@@ -181,13 +189,7 @@ void loop()
     float BMEtempF = myBME280.readTempF();
     float BMEhumid = myBME280.readFloatHumidity();
 
-    dataLogString += BMEtempC;
-    dataLogString += ",";
-    dataLogString += BMEtempF;
-    dataLogString += ",";
-    dataLogString += BMEhumid;
-    dataLogString += ",";
-
+  
     
     if (!correctionSet) {
       if( millis() > delayMinutes * 60 * 1000 ){
@@ -196,15 +198,14 @@ void loop()
         tempCorrectionF = BMEtempF-startTempF;
         outputString += "Found Temperature correction of ";
         outputString += tempCorrectionC; 
-        outputString += " at time";
+        outputString += " at time ";
         outputString += currentTime;
         outputString += "\n";
         correctionSet = true;
       } 
-      else if (millis() > 10000  && myLog.size(calibrationTimeStampFile) > -1){
+      else if ( myLog.size(calibrationTimeStampFile) > -1){
         // check for logged calibration
-        char calibuf[50];
-        myLog.read(calibuf,50,calibrationTimeStampFile);
+        myLog.read(calibuf,30,calibrationTimeStampFile);
 
         char buff[2];
         //year
@@ -238,32 +239,57 @@ void loop()
         fbuff[3] = calibuf[18];
         fbuff[4] = calibuf[19];
         fbuff[5] = calibuf[20];
+        fbuff[6] = calibuf[21];
+        fbuff[7] = calibuf[22];
+        fbuff[8] = ' ';
+        fbuff[9] = ' ';
         float caliC = atof(fbuff);
 
         //cCalibration
-        fbuff[0] = calibuf[22];
-        fbuff[1] = calibuf[23];
-        fbuff[2] = calibuf[24];
-        fbuff[3] = calibuf[25];
-        fbuff[4] = calibuf[26];
-        fbuff[5] = calibuf[27];
+        fbuff[0] = calibuf[24];
+        fbuff[1] = calibuf[25];
+        fbuff[2] = calibuf[26];
+        fbuff[3] = calibuf[27];
+        fbuff[4] = calibuf[28];
+        fbuff[5] = calibuf[29];
+        fbuff[6] = calibuf[30];
+        fbuff[7] = calibuf[31];
+        fbuff[8] = ' ';
+        fbuff[9] = ' ';
         float caliF = atof(fbuff);
 
-        char cal_output[50];
-        sprintf(cal_output, "%02d %02d %02d %02d %02d %06d %06d", 
+        
+        sprintf(calibuf2, "%02d %02d %02d %02d %02d ", 
               caliyear,calimonth,
-              caliday,calihour, calimin,
-              caliC, caliF);
-        Serial.print("Read from calibration file: ");
-        Serial.print(cal_output);
-        Serial.print(" from ");
-        Serial.println(calibuf);     
+              caliday,calihour, calimin);
+
+        if (caliyear == rtc.getYear() &&
+            calimonth == rtc.getMonth() &&
+            caliday == rtc.getDate() &&
+            ((calihour == rtc.getHours() && (rtc.getMinutes() - calimin < tolMinutes)) ||
+              (calihour +1 == rtc.getHours() && (rtc.getMinutes()+60 - calimin < tolMinutes)))) {
+                Serial.print("Using calibration from file: ");
+                Serial.print(calibuf2);
+                Serial.print(caliC);
+                Serial.print(" ");
+                Serial.println(caliF);
+                tempCorrectionC = caliC;
+                tempCorrectionF = caliF;
+                correctionSet = true;
+              }
+    
       }
-    } 
+    }
 
     outputString += "Time\t";
     outputString += currentTime;
     dataLogString += currentTime;
+    dataLogString += ",";
+    dataLogString += BMEtempC;
+    dataLogString += ",";
+    dataLogString += BMEtempF;
+    dataLogString += ",";
+    dataLogString += BMEhumid;
     dataLogString += ",";
     dataLogString += BMEtempC-tempCorrectionC;
     dataLogString += ",";
@@ -317,7 +343,7 @@ void loop()
     myLog.append(currentLogFileName);
     myLog.println(dataLogString);
     myLog.syncFile();
-
+          
     // write out the latest calibration time and value, so we can reuse at restart
     // only do this once a minute
     if (correctionSet ) {
@@ -327,20 +353,19 @@ void loop()
       myLog.append(calibrationTimeStampFile);
 
     // arudino sprintf can't do floats because ¯\_(ツ)_/¯
-      char cCorr[8];
-      char fCorr[8];
-      dtostrf(tempCorrectionC,6,1,cCorr[6]);
-      dtostrf(tempCorrectionF,6,1,fCorr[6]);
-      
-      char cal_output[50];
-      sprintf(cal_output, "%02d %02d %02d %02d %02d %s %s", 
+      dtostrf(tempCorrectionC,8,1,cCorr);
+      dtostrf(tempCorrectionF,8,1,fCorr);
+
+      sprintf(calibuf, "%02d %02d %02d %02d %02d %s %s", 
               rtc.getYear(),rtc.getMonth(),
               rtc.getDate(),rtc.getHours(),rtc.getMinutes(),
-              cCorr,fCorr);
-      myLog.println(cal_output);
+              cCorr, fCorr);
+      myLog.println(calibuf);
+      myLog.syncFile();
       Serial.print("Wrote calibration file: ");
-      Serial.println(cal_output);
+      Serial.println(calibuf);
     }      
+
   }
 
   delay(secsBetweenSamples *1000); //Don't spam the I2C bus
@@ -381,7 +406,7 @@ String printRunTime()
   sprintf(buffer, "[%02d:%02d:%02d]", hours, minutes, seconds);
   
   String output = buffer;
-  if (hours == 0 && minutes < delayMinutes)
+  if (! correctionSet)
     output += (",Not yet valid");
 
  return output;
