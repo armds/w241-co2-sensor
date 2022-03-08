@@ -1,34 +1,31 @@
 /******************************************************************************
-  Read basic CO2 and TVOCs
+  Reads information from an evironmental sensor and writes an hourly csv file
+  with environmental data.
 
-  Marshall Taylor @ SparkFun Electronics
-  Nathan Seidle @ SparkFun Electronics
+  Boards expected:
 
-  April 4, 2017
+  - Sparkfun Qwiic Pro Micro USB-C
+  - Sparkfun CCS811/BME280 (Qwiic) Environmental Combo Breakout
+  - Sparkfun Qwiic OpenLog
+  - SparkFun Real Time Clock Module
 
-  https://github.com/sparkfun/CCS811_Air_Quality_Breakout
-  https://github.com/sparkfun/SparkFun_CCS811_Arduino_Library
+  Libraries required:
+   http://librarymanager/All#SparkFun_CCS811
+   http://librarymanager/All#SparkFunBME280
+   https://www.arduinolibraries.info/libraries/spark-fun-qwiic-open-log
+   http://librarymanager/All#SparkFun_RV1805
 
-  Read the TVOC and CO2 values from the SparkFun CSS811 breakout board
-
-  A new sensor requires at 48-burn in. Once burned in a sensor requires
-  20 minutes of run in before readings are considered good.
-
-  Hardware Connections (Breakoutboard to Arduino):
-  3.3V to 3.3V pin
-  GND to GND pin
-  SDA to A4
-  SCL to A5
-
+ Author: Anne Marshal 
+ Copyright: 2022
 ******************************************************************************/
 #include <Wire.h>
 
-#include "SparkFunCCS811.h" //Click here to get the library: http://librarymanager/All#SparkFun_CCS811
+#include "SparkFunCCS811.h" 
 #include "SparkFunBME280.h"
 #include "SparkFun_Qwiic_OpenLog_Arduino_Library.h"
 #include "SparkFun_RV1805.h"
 
-#define CCS811_ADDR 0x5B //Default I2C Address
+#define CCS811_ADDR 0x5B //Default I2C Address for the sensor
 //#define CCS811_ADDR 0x5A //Alternate I2C Address
 
 CCS811 myCCS811(CCS811_ADDR);
@@ -53,24 +50,32 @@ float tolMinutes = 10;
 String calibrationTimeStampFile = "calstamp.txt";
 
 // set this to either B or W depending on which sensor is being written to
-char sensorId = 'W';
+// is only used for output CSV filenames
+char sensorId = 'B';
 
 // if we need to set the clock chip, this will set it to the time the IDE started
 // then add 3 hours to adjust to EST time.  Don't do this after 9pm thought, 'cause its not smart!
+// unless the chip has crashed for a while, it should seldom need to have the clock set.
 boolean setClock = false;
 
-// interval between samples in seconds
-int secsBetweenSamples = 5;
+// desired interval between samples in seconds
+unsigned int secsBetweenSamples = 5;
 
 // interval between calibration file writes
-int secsBetweenCalibWrites = 60;
+unsigned int secsBetweenCalibWrites = 120;
 
 
 // string buffers like to be global, because memory is a thing
 char fCorr[10];
 char cCorr[10];
 char calibuf[30];
-char calibuf2[30];         
+char calibuf2[30];     
+
+// Globalize frequently used vars for faster loops
+unsigned int loopStartTime;
+String currentTime;
+
+   
 void setup()
 {
   Serial.begin(9600);
@@ -155,11 +160,13 @@ void setup()
 
 void loop()
 {
+  loopStartTime = millis();
+  
   if (rtc.updateTime() == false) //Updates the time variables from RTC
   {
     Serial.print("RTC failed to update");
   }
-  String currentTime = rtc.stringTime();
+  currentTime = rtc.stringTime();
 
   // if the current logging csv file does not exist, intitalize it with the header row
   String currentLogFileName = getCurrentLogFileName();
@@ -171,28 +178,31 @@ void loop()
     myLog.println("Time,TempC,TempF,Humid%,Corr TempC,Corr TempF,Press mbar,CO2 ppm,TVOC ppb,RunTime,Validity");
     myLog.syncFile();
   }
-  
 
-  
-  //Check to see if data is ready with .dataAvailable()
+  //Check to see if environmental data is ready with .dataAvailable()
   if (myCCS811.dataAvailable())
   {
+
+    // outputString is the log message you'll see on the monitor
     String outputString ="";
+
+    //dataLogString is the comma delimited data written to the hourly csv files
     String dataLogString ="";
     
-    
-    //If so, have the sensor read and calculate the results.
+    //read the sensor and calculate the results.
     myCCS811.readAlgorithmResults();
 
     float BMEtempC = myBME280.readTempC();
     float BMEtempF = myBME280.readTempF();
     float BMEhumid = myBME280.readFloatHumidity();
 
-  
-    
+    //once we have the base read, we can work out if we have the correction parameters we need yet
     if (!correctionSet) {
+      // we've waited long enough, and not picked it up from a file so... do the calculation
       if( millis() > delayMinutes * 60 * 1000 ){
-    
+        // calculate the temperature differential of the chip warming up.  Device should be held
+        // and environment with a stable temperature for the first delayMinutes from power up.
+        // delay of 20 minutes recommended
         tempCorrectionC = BMEtempC-startTempC;
         tempCorrectionF = BMEtempF-startTempF;
         outputString += "Found Temperature correction of ";
@@ -203,9 +213,10 @@ void loop()
         correctionSet = true;
       } 
       else if ( myLog.size(calibrationTimeStampFile) > -1){
-        // check for logged calibration
+        // check for logged calibration, if recent enough will be used for corrections
         myLog.read(calibuf,30,calibrationTimeStampFile);
 
+        // arudino C is limited, so we need to deal with the input as string buffers :(
         char buff[2];
         //year
         buff[0] = calibuf[0];
@@ -230,6 +241,9 @@ void loop()
         buff[1] = calibuf[13];
         int calimin = atoi(buff);  
 
+        // and it REALLY can't deal with floats.  I appologize to any reader that this is what it 
+        // is apparently adruino thinks this is best?
+        
         char fbuff[6];
         //cCalibration
         fbuff[0] = calibuf[15];
@@ -257,17 +271,15 @@ void loop()
         fbuff[9] = ' ';
         float caliF = atof(fbuff);
 
-        
-        sprintf(calibuf2, "%02d %02d %02d %02d %02d ", 
-              caliyear,calimonth,
-              caliday,calihour, calimin);
-
         if (caliyear == rtc.getYear() &&
             calimonth == rtc.getMonth() &&
             caliday == rtc.getDate() &&
             ((calihour == rtc.getHours() && (rtc.getMinutes() - calimin < tolMinutes)) ||
               (calihour +1 == rtc.getHours() && (rtc.getMinutes()+60 - calimin < tolMinutes)))) {
-                Serial.print("Using calibration from file: ");
+                sprintf(calibuf2, "%02d %02d %02d %02d %02d ", 
+                        caliyear,calimonth,
+                        caliday,calihour, calimin);
+                Serial.print("Reusing calibration from file: ");
                 Serial.print(calibuf2);
                 Serial.print(caliC);
                 Serial.print(" ");
@@ -275,13 +287,10 @@ void loop()
                 tempCorrectionC = caliC;
                 tempCorrectionF = caliF;
                 correctionSet = true;
-              }
-    
+        } 
       }
     }
-
-    outputString += "Time\t";
-    outputString += currentTime;
+   
     dataLogString += currentTime;
     dataLogString += ",";
     dataLogString += BMEtempC;
@@ -294,50 +303,39 @@ void loop()
     dataLogString += ",";
     dataLogString += BMEtempF-tempCorrectionF;
     dataLogString += ",";
-    //This sends the temperature data to the CCS811
+    
+    //This sends the temperature data to the CCS811 to calibrate the sensor readings
     myCCS811.setEnvironmentalData(BMEhumid, BMEtempC-tempCorrectionC);
     
-    outputString +=("\traw temp:\t");
-    outputString +=(BMEtempC);
-    outputString +=("C");
+    outputString += "Time\t";
+    outputString += currentTime;
 
-    outputString +=("\t");
-    outputString +=(BMEtempF);
-    outputString +=("F\t");
-
-    outputString +=("corrected temp\t");
+    
+    outputString +=("\tcorrected temp\t");
     outputString +=(BMEtempC-tempCorrectionC);
     outputString +=("C");
 
     outputString +=("\t");
     outputString +=(BMEtempF-tempCorrectionF);
     outputString +=("F\t");
-
-    outputString +=("humid\t");
-    outputString +=(BMEhumid);
-    outputString +=("%\t");
-
-    outputString +=("pressure\t");
-    float BMEmbar = myBME280.readFloatPressure()/100;
-    outputString +=(BMEmbar); // convert to mbar
-    outputString +=("mbar\t");
-    dataLogString += BMEmbar;
-    dataLogString += ",";
-  
+    
     outputString +=" CO2\t";
     //Returns calculated CO2 reading
     outputString +=myCCS811.getCO2();
+    
     dataLogString += myCCS811.getCO2();
     dataLogString += ",";
     
     outputString +="ppm\t tVOC\t";
     //Returns calculated TVOC reading
-    outputString +=myCCS811.getTVOC();
+    outputString += myCCS811.getTVOC();
+    outputString += "ppb\t";
+    outputString += printRunTime(loopStartTime);
+    
     dataLogString += myCCS811.getTVOC();
-    dataLogString += ",";
-    outputString +="ppb\t";
-    outputString +=  printRunTime();
-    dataLogString += printRunTime();
+    dataLogString += ",";  
+    dataLogString += printRunTime(loopStartTime);
+   
     Serial.println(outputString);
     myLog.append(currentLogFileName);
     myLog.println(dataLogString);
@@ -345,7 +343,11 @@ void loop()
           
     // write out the latest calibration time and value, so we can reuse at restart
     // only do this once a minute
-    if (correctionSet ) {
+    /*Serial.print(loopStartTime % (secsBetweenCalibWrites *1000));
+    Serial.print(" vs ");
+    Serial.println(secsBetweenSamples*1000);
+    */
+    if (correctionSet & (loopStartTime % (secsBetweenCalibWrites *1000) <= secsBetweenSamples*1000)) {
       if (myLog.size(calibrationTimeStampFile) > -1) {
         myLog.removeFile(calibrationTimeStampFile);
       }
@@ -367,11 +369,13 @@ void loop()
 
   }
 
-  delay(secsBetweenSamples *1000); //Don't spam the I2C bus
+  unsigned int delayTime = (secsBetweenSamples*1000 - (millis() - loopStartTime)); // account for how long we took to process
+  if (delayTime > 0) {
+    delay(delayTime); //Snooze between samples, should have this at least 1 sec to not spam the I2C bus
+  }
 }
 
-//Prints the amount of time the board has been running
-//Does the hour, minute, and second calcs
+//Generates the output filename based on how long we've been running.
 String getCurrentLogFileName()
 {
   char buffer[50];
@@ -390,11 +394,10 @@ String getCurrentLogFileName()
 
 //Prints the amount of time the board has been running
 //Does the hour, minute, and second calcs
-String printRunTime()
+String printRunTime(unsigned long runTime)
 {
   char buffer[50];
 
-  unsigned long runTime = millis();
 
   int hours = runTime / (60 * 60 * 1000L);
   runTime %= (60 * 60 * 1000L);
