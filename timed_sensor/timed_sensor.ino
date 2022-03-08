@@ -44,7 +44,7 @@ float startTempC;
 float startTempF;
 
 // How long to wait for temperature stabilization for correction term, normally 20
-float delayMinutes = 1;
+float delayMinutes = 20;
 
 // sleep tolerance, how old a calibration use stamp can be for us to still use it.
 float tolMinutes = 10;
@@ -53,16 +53,17 @@ float tolMinutes = 10;
 String calibrationTimeStampFile = "calstamp.txt";
 
 // set this to either B or W depending on which sensor is being written to
-char sensorId = 'B';
+char sensorId = 'W';
 
-// if we need to set the clock chip
+// if we need to set the clock chip, this will set it to the time the IDE started
+// then add 3 hours to adjust to EST time.  Don't do this after 9pm thought, 'cause its not smart!
 boolean setClock = false;
 
 // interval between samples in seconds
 int secsBetweenSamples = 5;
 
 // interval between calibration file writes
-int secsBetweenCalibWrites = 10;
+int secsBetweenCalibWrites = 60;
 
 
 // string buffers like to be global, because memory is a thing
@@ -150,8 +151,6 @@ void setup()
     Serial.print("BME280 online Initial temperature(C):" );
     Serial.println(startTempC);
   }
-
-  
 }
 
 void loop()
