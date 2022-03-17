@@ -51,7 +51,7 @@ String calibrationTimeStampFile = "calstamp.txt";
 
 // set this to either B or W depending on which sensor is being written to
 // is only used for output CSV filenames
-char sensorId = 'B';
+char sensorId = 'P';
 
 // if we need to set the clock chip, this will set it to the time the IDE started
 // then add 3 hours to adjust to EST time.  Don't do this after 9pm thought, 'cause its not smart!
