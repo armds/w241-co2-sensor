@@ -47,6 +47,8 @@ Code in this repo is based on the example code provided by SparkFun for each car
 
 One important issue is setting the clock chip.  The way it is set is when you push the code to the device it will set the device's time to the time at which the IDE was started.   So if you take 10 minutes from start to upload your clock will be off by that amount.  So get your code perfect, restart the IDE, and push.  Do this cycle for each device, and know they will be off by some degree due to the time this delay.  Sorry for the hassle, it is regretable!
 
+Additionally our devices were built in one time zone, and deployed in another, so there is a 3 hour timezone correction built into the code, which may not be needed for all applications.
+
 # Caviats for use
 
 There are a few execution requirements to ensure you get an accurate atospheric measurements.
@@ -55,5 +57,10 @@ There are a few execution requirements to ensure you get an accurate atospheric 
 
 The first caveat is the sensors need to be calibrated at rest in a stable environment before starting to collect data.  The Environment chip has both the temperature sensor and the air sensor in close proximity.  At operating temperature the environmental chip can generate significant heat (up to 15 deg).  The temperature is one of the inputs for the CO2 calibration, so this temperature increase will make the measurements in accurate.  To compensate for this the device records its temperature at power up, and after 20 minutes will take the accumulated temperature change and subtract that from all subsequent measurements for calibration. In addition the plastic of the case and the battery can hold heat that messes this up.
 
-This means for best performance you want to hold all devices in the same place, ideally not indoors, so the residual temperature is close to outdoors
+This means for best performance when not in use you should to hold all devices in the same place, ideally not indoors, so the residual temperature is close to outdoors.  Additionally you should plug them in 20 minutes in advance, and keep them in a stabile temperature location.  So that that calibration constant is not picking up additional effects. 
+
+Best practice would be to keep them outside, or in a cool garage, plug them in a half hour before you will deploy them, and minimize heat accumulation en route.
+
 ## Operating limits
+
+These are prototype devices so are not environmentally secured.  In particular they are not robust to rain, so need to be placed  someplace under shelter.  Additionally direct sunlight can increase both measured temperature and CO2.  So both devices should be deployed with the same sun exposure, ideally shaddowed.
